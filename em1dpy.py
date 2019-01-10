@@ -6,8 +6,41 @@ import numpy as np
 import scipy.io
 from scipy.special import erf
 
+explain = """
+このプログラムの使い方
+1. 時間領域、周波数領域どちらかのクラスをインスタンス化する。
+    引数は、
+    x座標
+    y座標
+    z座標
+    hs
+    層の比抵抗（numpy1次元配列） 例：np.array([100, 100])
+    層厚(numpy1次元配列)　例：np.array([20])
+    周波数帯域(10^a - 10^b) この、a,bを配列で渡す。 例）[0, 6]
+    プロット数
+    を順に渡す。
+    デフォルト引数は
+    hankel_filter="kong241" or "anderson801"
+    を指定することによって、コングのフィルターかアンダーソンのフィルタを選択できる。
+    デフォルトはコングのフィルター。
 
-class Utility():
+    例）
+    import em1dpy as em
+    fdem = em.Fdem()
+
+2. 計算したい関数を実行する。
+    vmdの場合
+    fdem.vmd()
+
+    circularloopの場合
+    fdem.circular_loop(radius)
+    radiusはループの半径を指定する。
+
+
+"""
+print(explain)
+
+class TdemUtility():
     @classmethod
     def get_gs_coefficient():
         pass
@@ -58,9 +91,6 @@ class BaseEm(metaclass=ABCMeta):
         else:
             raise Exception(
                 "kong241 or anderson801 is only available as filter name")
-
-    def transmitter_base(self):
-        pass
 
     def make_kernel(self, transmitter, omega):
         k = (omega ** 2.0 * self.mu * self.epsrn
@@ -181,7 +211,7 @@ class Fdem(BaseEm):
 
             ans = self.moment * ans
 
-            return {"ans": ans, "freq": self.freq}
+        return {"ans": ans, "freq": self.freq}
 
     def vmd(self):
         # 送信源で計算できない座標が入力されたときエラーを出す
@@ -200,18 +230,11 @@ class Fdem(BaseEm):
         ans = self.repeat_hankel(transmitter)
 
         return ans
-        """
-        # under developing...
-        たぶんここいらない
-        if self.num_layer >= 2:
-            h[0] = dh[0]
-
-        if self.num_layer >= 3:
-            for ii in range(2, self.num_layer):
-                h[ii - 1] = h[ii - 2] + dh[ii - 1]
-        """
 
         def loop():
+            pass
+
+        def coincident_loop():
             pass
 
 
