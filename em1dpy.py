@@ -1,6 +1,6 @@
 import warnings
-from contextlib import contextmanager
 from abc import ABCMeta, abstractmethod
+import sys
 
 import numpy as np
 import scipy.io
@@ -62,21 +62,20 @@ class BaseEm(metaclass=ABCMeta):
     def transmitter_base(self):
         pass
 
-    @abstractmethod
-    def make_kernel(self, omega):
+    def make_kernel(self, transmitter, omega):
         k = (omega ** 2.0 * self.mu * self.epsrn
              - 1j * omega * self.mu * self.sigma) ** 0.5
-        # k0 = 0 これたぶんいらない。あとで消す。
         u0 = self.lamda
         u = np.zeros((self.num_layer, self.filter_length, 1), dtype=complex)
 
         for ii in range(self.num_layer):
-            u[ii] = ((self.lamda ** 2 - k[ii] ** 2) ** 0.5).reshape((self.filter_length, 1))
+            u[ii] = ((self.lamda ** 2 - k[ii] ** 2) ** 0.5)\
+                    .reshape((self.filter_length, 1))
 
         tanhuh = np.zeros((self.num_layer - 1, self.filter_length, 1), dtype=complex)
 
         for ii in range(self.num_layer - 1):
-            tanhuh[ii] = np.tanh(u[ii] * self.dh[ii])
+            tanhuh[ii] = np.tanh(u[ii] * self.thickness[ii])
 
         z_hat0 = 1j * omega * self.mu0
         y_0 = u0 / z_hat0
@@ -90,15 +89,23 @@ class BaseEm(metaclass=ABCMeta):
         y_hat[self.num_layer - 1, :, 0] = y_[self.num_layer - 1, :, 0]
 
         if self.num_layer >= 2:
-            numerator = y_hat[self.num_layer - 1, :, 0] + y_[self.num_layer - 2, :, 0] * tanhuh[self.num_layer - 2, :, 0]
-            denominator = y_[self.num_layer - 2, :, 0] + y_hat[self.num_layer - 1, :, 0] * tanhuh[self.num_layer - 2, :, 0]
-            y_hat[self.num_layer - 2, :, 0] = y_[self.num_layer - 2, :, 0] * numerator / denominator
+            numerator = y_hat[self.num_layer - 1, :, 0] \
+                        + y_[self.num_layer - 2, :, 0] \
+                        * tanhuh[self.num_layer - 2, :, 0]
+            denominator = y_[self.num_layer - 2, :, 0] \
+                          + y_hat[self.num_layer - 1, :, 0] \
+                          * tanhuh[self.num_layer - 2, :, 0]
+            y_hat[self.num_layer - 2, :, 0] = y_[self.num_layer - 2, :, 0] \
+                                              * numerator / denominator
 
             if self.num_layer >= 3:
                 for ii in range(self.num_layer - 2, 0, -1):
-                    numerator = y_hat[ii, :, 0] + y_[ii - 1, :, 0] * tanhuh[ii - 1, :, 0]
-                    denominator = y_[ii - 1, :, 0] + y_hat[ii, :, 0] * tanhuh[ii, :, 0]
-                    y_hat[ii - 1, :, 0] = y_[ii - 1, :, 0] * numerator / denominator
+                    numerator = y_hat[ii, :, 0] \
+                                + y_[ii - 1, :, 0] * tanhuh[ii - 1, :, 0]
+                    denominator = y_[ii - 1, :, 0] \
+                                  + y_hat[ii, :, 0] * tanhuh[ii, :, 0]
+                    y_hat[ii - 1, :, 0] = y_[ii - 1, :, 0] \
+                                          * numerator / denominator
 
         elif self.num_layer == 1:
             # 1層のとき、特に処理なし
@@ -109,33 +116,20 @@ class BaseEm(metaclass=ABCMeta):
         e_up = np.exp(-u0 * (self.z + self.hs))
         e_down = np.exp(u0 * (self.z - self.hs))
 
-        return{"z_hat0": z_hat0, "gamma_te": gamma_te,
-               "e_up": e_up, "e_down": e_down}
-        # ここから下、VMD限定のコード
-        kernel_e_phai = (e_up + gamma_te * e_down) * self.lamda ** 2 / u0
-        kernel_h_r = (e_up - gamma_te * e_down) * self.lamda ** 2
-        kernel_h_z = kernel_e_phai * self.lamda
-        return {"kernelEphai": kernel_e_phai, "kernelHr": kernel_h_r,
-                "kernelHz": kernel_h_z, "zHat0": z_hat0}
+        if transmitter == "vmd":
+            kernel_e_phai = (e_up + gamma_te * e_down) * self.lamda ** 2 / u0
+            kernel_h_r = (e_up - gamma_te * e_down) * self.lamda ** 2
+            kernel_h_z = kernel_e_phai * self.lamda
+            return {"kernel_e_phai": kernel_e_phai, "kernel_h_r": kernel_h_r,
+                    "kernel_h_z": kernel_h_z, "z_hat0": z_hat0}
+        elif transmitter == "circular_loop" or "coincident_loop":
+            pass
 
     @abstractmethod
-    def hankel_calc(self, omega, freq, index_freq):
-        ans = {}
-        omega = 2 * np.pi * freq[index_freq - 1]
-        kernel = self.make_kernel(omega)
-        e_phai = np.dot(self.wt1.T, kernel["kernel_e_phai"])
-        h_r = np.dot(self.wt1.T, kernel["kernel_h_r"])
+    def hankel_calc(self):
+        pass
 
-        # ここから下、VMD限定のコード
-        h_z = np.dot(self.wt0.T, kernel["kernel_h_z"])
-        ans["e_phai"] = (-1 * kernel["z_hat0"] * e_phai) / (4 * np.pi * self.r)
-        ans["h_r"] = h_r / (4 * np.pi * self.r)
-        ans["h_z"] = h_z / (4 * np.pi * self.r)
-
-        return ans
-
-    @abstractmethod
-    def loop_hankel(self):
+    def repeat_hankel(self):
         pass
 
 
@@ -149,14 +143,63 @@ class Fdem(BaseEm):
         # 渡される引数から計算する変数
         self.freq = np.logspace(freq_range[0], freq_range[1], num_freq)
 
+    def hankel_calc(self, transmitter, index_freq):
+        ans = {}
+        omega = 2 * np.pi * self.freq[index_freq - 1]
+        kernel = self.make_kernel(transmitter, omega)
+        e_phai = np.dot(self.wt1.T, kernel["kernel_e_phai"])
+        h_r = np.dot(self.wt1.T, kernel["kernel_h_r"])
+
+        if transmitter == "vmd":
+            h_z = np.dot(self.wt0.T, kernel["kernel_h_z"])
+            ans["e_phai"] = (-1 * kernel["z_hat0"] * e_phai) / (4 * np.pi * self.r)
+            ans["h_r"] = h_r / (4 * np.pi * self.r)
+            ans["h_z"] = h_z / (4 * np.pi * self.r)
+
+        elif transmitter == "circular_loop" or "coincident_loop":
+            pass
+
+        return ans
+
+    def repeat_hankel(self, transmitter):
+        e_phai = np.zeros(self.num_freq, dtype=complex)
+        h_r = np.zeros(self.num_freq, dtype=complex)
+        ans = np.zeros((self.num_freq, 6), dtype=complex)
+
+        for index_freq in range(1, self.num_freq + 1):
+            em_field = self.hankel_calc(transmitter, index_freq)
+            e_phai[index_freq - 1] = em_field["e_phai"].reshape(1)
+            h_r[index_freq - 1] = em_field["h_r"]
+            # 電場の計算
+            ans[index_freq - 1, 0] = -self.sin_phai * e_phai[index_freq - 1]  # Ex
+            ans[index_freq - 1, 1] = self.cos_phai * e_phai[index_freq - 1]  # Ey
+            ans[index_freq - 1, 2] = 0  # Ez
+            # 磁場の計算
+            ans[index_freq - 1, 3] = self.cos_phai * h_r[index_freq - 1]  # Hx
+            ans[index_freq - 1, 4] = self.sin_phai * h_r[index_freq - 1]  # Hy
+            ans[index_freq - 1, 5] = em_field["h_z"]  # Hz
+
+            ans = self.moment * ans
+
+            return {"ans": ans, "freq": self.freq}
+
     def vmd(self):
+        # 送信源で計算できない座標が入力されたときエラーを出す
         if self.z == 0:
             warnings.warn("送信機vmdでz座標が0のとき、計算精度は保証されていません", stacklevel=2)
 
         if self.r == 0:
             raise Exception("x, y座標共に0のため、計算結果が発散しました。")
 
+        # 送信源固有のパラメータ設定
+        transmitter = sys._getframe().f_code.co_name
+
         self.lamda = self.y_base / self.r
+        self.moment = self.vmd_moment
+
+        ans = self.repeat_hankel(transmitter)
+
+        return ans
         """
         # under developing...
         たぶんここいらない
@@ -167,27 +210,6 @@ class Fdem(BaseEm):
             for ii in range(2, self.num_layer):
                 h[ii - 1] = h[ii - 2] + dh[ii - 1]
         """
-
-        e_phai = np.zeros(self.num_freq, dtype=complex)
-        h_r = np.zeros(self.num_freq, dtype=complex)
-        ans = np.zeros((self.num_freq, 6), dtype=complex)
-
-        for index_freq in range(1, self.num_freq + 1):
-            em_field = self.hankel_calc()
-            e_phai[index_freq - 1] = em_field["e_phai"].reshape(1)
-            h_r[index_freq - 1] = em_field["hR"]
-            # 電場の計算
-            ans[index_freq - 1, 0] = -self.sin_phai * e_phai[index_freq - 1]  # Ex
-            ans[index_freq - 1, 1] = self.cos_phai * e_phai[index_freq - 1]  # Ey
-            ans[index_freq - 1, 2] = 0  # Ez
-            # 磁場の計算
-            ans[index_freq - 1, 3] = self.cos_phai * h_r[index_freq - 1]  # Hx
-            ans[index_freq - 1, 4] = self.sin_phai * h_r[index_freq - 1]  # Hy
-            ans[index_freq - 1, 5] = em_field["hZ"]  # Hz
-
-            ans = self.moment * ans
-
-            return {"A/m": ans, "freq": self.freq}
 
         def loop():
             pass
