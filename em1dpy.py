@@ -6,39 +6,45 @@ import numpy as np
 import scipy.io
 from scipy.special import erf
 
-explain = """
-このプログラムの使い方
-1. 時間領域、周波数領域どちらかのクラスをインスタンス化する。
-    引数は、
-    x座標
-    y座標
-    z座標
-    hs
-    層の比抵抗（numpy1次元配列） 例：np.array([100, 100])
-    層厚(numpy1次元配列)　例：np.array([20])
-    周波数帯域(10^a - 10^b) この、a,bを配列で渡す。 例）[0, 6]
-    プロット数
-    を順に渡す。
-    デフォルト引数は
-    hankel_filter="kong241" or "anderson801"
-    を指定することによって、コングのフィルターかアンダーソンのフィルタを選択できる。
-    デフォルトはコングのフィルター。
 
-    例）
-    import em1dpy as em
-    fdem = em.Fdem()
+def explain():
+    text = """
+    このプログラムの使い方
+    1. 時間領域、周波数領域どちらかのクラスをインスタンス化する。
+        引数は、
+        受信機のx座標：x
+        受信機のy座標：y
+        受信機のz座標：ｚ
+        送信機の高さ：height_source
+        層の比抵抗（numpy1次元配列） 例：np.array([100, 100])：res
+        層厚(numpy1次元配列)　例：np.array([20])：thickness
+        周波数帯域(10^a - 10^b) この、a,bをリストで渡す。 例）[0, 6]：freq_range
+        or
+        時間幅(10^a - 10^b) この、a,bをリストで渡す。 例）[0, 6]：time_range
+        プロット数：plot_number
+        hankel変換のフィルター：hankel_filter（kong241 or anderson801）
+        を順に渡す。
+        デフォルト
+        hankel_filter="kong241" or "anderson801"
+        を指定することによって、コングのフィルターかアンダーソンのフィルタを選択できる。
+        デフォルトはコングのフィルター。
 
-2. 計算したい関数を実行する。
-    vmdの場合
-    fdem.vmd()
+        例）
+        import em1dpy as em
+        fdem = em.Fdem()
 
-    circularloopの場合
-    fdem.circular_loop(radius)
-    radiusはループの半径を指定する。
+    2. 計算したい関数を実行する。
+        vmdの場合
+        fdem.vmd()
+
+        circularloopの場合
+        fdem.circular_loop(radius)
+        radiusはループの半径を指定する。
 
 
-"""
-print(explain)
+    """
+    print(text)
+
 
 class TdemUtility():
     @classmethod
@@ -47,12 +53,12 @@ class TdemUtility():
 
 
 class BaseEm(metaclass=ABCMeta):
-    def __init__(self, x, y, z, hs, current, res, thickness, hankel_filter="kong241"):
+    def __init__(self, x, y, z, height_source, current, res, thickness, plot_number, hankel_filter="kong241"):
         # 必ず渡させる引数
         self.x = x
         self.y = y
         self.z = z
-        self.hs = hs
+        self.height_source = - height_source
         self.current = current
         self.res = res  # resistivity
         self.thickness = thickness
@@ -70,7 +76,7 @@ class BaseEm(metaclass=ABCMeta):
         # 渡された引数から計算する変数
         self.num_layer = len(res)
         self.sigma = 1 / res
-        self.r = np.sqrt(x**2 + y**2)
+        self.r = np.sqrt(x ** 2 + y ** 2)
         self.cos_phai = self.x / self.r
         self.sin_phai = self.y / self.r
 
@@ -134,7 +140,7 @@ class BaseEm(metaclass=ABCMeta):
                                 + y_[ii - 1, :, 0] * tanhuh[ii - 1, :, 0]
                     denominator = y_[ii - 1, :, 0] \
                                   + y_hat[ii, :, 0] * tanhuh[ii, :, 0]
-                    y_hat[ii - 1, :, 0] = y_[ii - 1, :, 0] \
+                    y_hat[ii - 1, :, 0] = y_[ii - 1, :, 0]\
                                           * numerator / denominator
 
         elif self.num_layer == 1:
@@ -143,8 +149,8 @@ class BaseEm(metaclass=ABCMeta):
 
         gamma_te = ((y_0 - y_hat[0, :, 0].reshape(self.filter_length, 1))
                     / (y_0 + y_hat[0, :, 0].reshape(self.filter_length, 1)))
-        e_up = np.exp(-u0 * (self.z + self.hs))
-        e_down = np.exp(u0 * (self.z - self.hs))
+        e_up = np.exp(-u0 * (self.z + self.height_source))
+        e_down = np.exp(u0 * (self.z - self.height_source))
 
         if transmitter == "vmd":
             kernel_e_phai = (e_up + gamma_te * e_down) * self.lamda ** 2 / u0
@@ -159,19 +165,39 @@ class BaseEm(metaclass=ABCMeta):
     def hankel_calc(self):
         pass
 
+    @abstractmethod
     def repeat_hankel(self):
         pass
 
+    def vmd(self):
+        # 送信源で計算できない座標が入力されたときエラーを出す
+        """
+        if self.z == 0:
+            warnings.warn("送信機vmdでz座標が0のとき、計算精度は保証されていません", stacklevel=2)
+        """
+        if self.r == 0:
+            raise Exception("x, y座標共に0のため、計算結果が発散しました。")
+
+        # 送信源固有のパラメータ設定
+        transmitter = sys._getframe().f_code.co_name
+
+        self.lamda = self.y_base / self.r
+        self.moment = self.vmd_moment
+
+        ans = self.repeat_hankel(transmitter)
+
+        return ans
+
 
 class Fdem(BaseEm):
-    def __init__(self, x, y, z, hs, current, res, thickness, freq_range, num_freq):
+    def __init__(self, x, y, z, height_source, current, res, thickness, freq_range, plot_number, hankel_filter="kong241"):
         # freq_rangeの渡し方 10^x 〜10^y x, yをリストで渡させる
         # コンストラクタの継承
-        super().__init__(x, y, z, hs, current, res, thickness)
+        super().__init__(x, y, z, height_source, current, res, thickness, plot_number)
         # 必ず渡される引数
-        self.num_freq = num_freq
+        self.num_freq = plot_number
         # 渡される引数から計算する変数
-        self.freq = np.logspace(freq_range[0], freq_range[1], num_freq)
+        self.freq = np.logspace(freq_range[0], freq_range[1], plot_number)
 
     def hankel_calc(self, transmitter, index_freq):
         ans = {}
@@ -201,7 +227,7 @@ class Fdem(BaseEm):
             e_phai[index_freq - 1] = em_field["e_phai"].reshape(1)
             h_r[index_freq - 1] = em_field["h_r"]
             # 電場の計算
-            ans[index_freq - 1, 0] = -self.sin_phai * e_phai[index_freq - 1]  # Ex
+            ans[index_freq - 1, 0] = - self.sin_phai * e_phai[index_freq - 1]  # Ex
             ans[index_freq - 1, 1] = self.cos_phai * e_phai[index_freq - 1]  # Ey
             ans[index_freq - 1, 2] = 0  # Ez
             # 磁場の計算
@@ -211,32 +237,39 @@ class Fdem(BaseEm):
 
             ans = self.moment * ans
 
-        return {"ans": ans, "freq": self.freq}
+        return {"freq": self.freq
+                , "e_phai": e_phai
+                , "h_x": ans[:, 3], "h_y": ans[:, 4], "h_z": ans[:, 5]
+                }
 
-    def vmd(self):
-        # 送信源で計算できない座標が入力されたときエラーを出す
-        if self.z == 0:
-            warnings.warn("送信機vmdでz座標が0のとき、計算精度は保証されていません", stacklevel=2)
+    def loop(self):
+        pass
 
-        if self.r == 0:
-            raise Exception("x, y座標共に0のため、計算結果が発散しました。")
+    def coincident_loop():
+        pass
 
-        # 送信源固有のパラメータ設定
-        transmitter = sys._getframe().f_code.co_name
+    def vmd_analytical(self):
+        # 角速度・波数の算出
+        omega = 2 * np.pi * self.freq
+        k1d = (omega ** 2 * self.mu0 * self.epsrn
+               - 1j * omega * self.mu0 * self.sigma[0]) ** 0.5
 
-        self.lamda = self.y_base / self.r
-        self.moment = self.vmd_moment
+        # 解析解の計算
+        numerator = - self.vmd_moment * (3 - (3 + 3j * k1d * self.r
+                                         - k1d ** 2 * self.r ** 2)
+                                         * np.exp(-1j * k1d * self.r))
+        denominator = 2 * np.pi * self.sigma[0] * self.r ** 4
+        e_phai = numerator / denominator
 
-        ans = self.repeat_hankel(transmitter)
+        numerator = self.vmd_moment\
+                    * (9 - (9 + 9j * k1d * self.r
+                       - 4 * k1d ** 2 * self.r ** 2
+                       - 1j * k1d ** 3 * self.r ** 3)
+                       * np.exp(-1j * k1d * self.r))
+        denominator = 2 * np.pi * k1d ** 2 * self.r ** 5
+        h_z = numerator / denominator
 
-        return ans
-
-        def loop():
-            pass
-
-        def coincident_loop():
-            pass
-
+        return {"freq": self.freq, "e_phai": e_phai, "h_z": h_z}
 
 class Tdem():
     @classmethod
