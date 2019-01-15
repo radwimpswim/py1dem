@@ -53,7 +53,7 @@ class TdemUtility():
 
 
 class BaseEm(metaclass=ABCMeta):
-    def __init__(self, x, y, z, height_source, current, res, thickness, plot_number, hankel_filter="kong241"):
+    def __init__(self, x, y, z, height_source, current, res, thickness, plot_number, turns = 1, hankel_filter="kong241"):
         # 必ず渡させる引数
         self.x = x
         self.y = y
@@ -64,6 +64,7 @@ class BaseEm(metaclass=ABCMeta):
         self.thickness = thickness
 
         # デフォルト引数に設定しておく引数(変えたいユーザもいる)
+        self.turns = turns
         self.hankel_filter = hankel_filter  # or anderson801
 
         # 指定しておく引数（変えたいユーザはほぼいない）
@@ -71,6 +72,8 @@ class BaseEm(metaclass=ABCMeta):
         self.mu = np.ones(len(res)) * self.mu0
         self.vmd_moment = 1
         self.moment = 1
+        self.circular_loop_moment = self.moment * current
+        self.coincident_loop_moment = self.moment * turns
         self.epsrn = 8.85418782e-12
 
         # 渡された引数から計算する変数
@@ -159,7 +162,16 @@ class BaseEm(metaclass=ABCMeta):
             return {"kernel_e_phai": kernel_e_phai, "kernel_h_r": kernel_h_r,
                     "kernel_h_z": kernel_h_z, "z_hat0": z_hat0}
         elif transmitter == "circular_loop" or "coincident_loop":
-            pass
+            besk1 = scipy.special.jn(1, self.lamda * self.r)
+            besk0 = scipy.special.jn(0, self.lamda * self.r)
+            besk1rad = scipy.special.jn(1, self.lamda * self.rad)
+            # p.219 eq. 4.86, 4.87, 4.88
+            kernel_e_phai = (e_up + gamma_te * e_down) * self.lamda * besk1 / u0
+            kernel_h_r = (e_up - gamma_te * e_down) * self.lamda * besk1
+            kernel_h_z = (e_up + gamma_te * e_down) * (self.lamda ** 2) * besk0 / u0
+            kernel_h_z_co = (e_up + gamma_te * e_down) * self.lamda * besk1rad / u0
+            return {"kernel_e_phai": kernel_e_phai, "kernel_h_r": kernel_h_r,
+                    "kernel_h_z": kernel_h_z, "kernel_h_z_co": kernel_h_z_co, "z_hat0": z_hat0}
 
     @abstractmethod
     def hankel_calc(self):
@@ -188,12 +200,28 @@ class BaseEm(metaclass=ABCMeta):
 
         return ans
 
+    def circular_loop(self, rad):
+        if rad == 0:
+            raise Exception("ループの半径を設定してください")
+
+        # 送信源固有のパラメータ設定
+        self.rad = rad
+        self.lamda = self.y_base / self.rad
+        self.moment = self.circular_loop_moment
+
+        transmitter = sys._getframe().f_code.co_name
+
+        ans = self.repeat_hankel(transmitter)
+
+        return ans
+
 
 class Fdem(BaseEm):
-    def __init__(self, x, y, z, height_source, current, res, thickness, freq_range, plot_number, hankel_filter="kong241"):
+    def __init__(self, x, y, z, height_source, current, res, thickness,
+                 freq_range, plot_number, turns = 1, hankel_filter="kong241"):
         # freq_rangeの渡し方 10^x 〜10^y x, yをリストで渡させる
         # コンストラクタの継承
-        super().__init__(x, y, z, height_source, current, res, thickness, plot_number)
+        super().__init__(x, y, z, height_source, current, res, thickness, plot_number, turns)
         # 必ず渡される引数
         self.num_freq = plot_number
         # 渡される引数から計算する変数
@@ -212,8 +240,15 @@ class Fdem(BaseEm):
             ans["h_r"] = h_r / (4 * np.pi * self.r)
             ans["h_z"] = h_z / (4 * np.pi * self.r)
 
-        elif transmitter == "circular_loop" or "coincident_loop":
-            pass
+        elif transmitter == "circular_loop":
+            h_z = np.dot(self.wt1.T, kernel["kernel_h_z"])
+            h_z_co = np.dot(self.wt1.T, kernel["kernel_h_z_co"])
+            ans["e_phai"] = (-1 * kernel["z_hat0"] * self.rad * e_phai)\
+                             / (2 * self.rad)
+            ans["h_r"] = (self.rad * h_r) / (2 * self.rad)
+            ans["h_z"] = (self.rad * h_z) / (2 * self.rad)
+            ans["hz_co"] = (1 * np.pi * (self.rad ** 2)
+                            * h_z_co) / self.rad
 
         return ans
 
@@ -242,9 +277,6 @@ class Fdem(BaseEm):
                 , "h_x": ans[:, 3], "h_y": ans[:, 4], "h_z": ans[:, 5]
                 }
 
-    def loop(self):
-        pass
-
     def coincident_loop():
         pass
 
@@ -270,6 +302,16 @@ class Fdem(BaseEm):
         h_z = numerator / denominator
 
         return {"freq": self.freq, "e_phai": e_phai, "h_z": h_z}
+
+    def circular_loop_analytical(self, rad):
+        omega = 2 * np.pi * self.freq
+        k1d = (omega ** 2 * self.mu0 * self.epsrn
+               - 1j * omega * self.mu0 * self.sigma[0]) ** 0.5
+        h_z = -self.circular_loop_moment / k1d ** 2 / rad ** 3\
+              * (3 - (3 + 3j * k1d * rad - k1d**2 * rad ** 2)
+              * np.exp(-1j * k1d * rad))
+
+        return {"freq": self.freq, "h_z": h_z}
 
 class Tdem():
     @classmethod
