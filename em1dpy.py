@@ -5,6 +5,7 @@ import sys
 import numpy as np
 import scipy.io
 from scipy.special import erf
+import math
 
 
 def explain():
@@ -53,7 +54,8 @@ class TdemUtility():
 
 
 class BaseEm(metaclass=ABCMeta):
-    def __init__(self, x, y, z, height_source, current, res, thickness, plot_number, turns = 1, hankel_filter="kong241"):
+    def __init__(self, x, y, z, height_source, current, res, thickness,
+                 plot_number, turns=1, hankel_filter="kong241"):
         # 必ず渡させる引数
         self.x = x
         self.y = y
@@ -313,12 +315,76 @@ class Fdem(BaseEm):
 
         return {"freq": self.freq, "h_z": h_z}
 
-class Tdem():
-    @classmethod
-    def buc(self):
-        print("be used")
 
-    @classmethod
-    def uc(self):
-        print("I'm uc")
-        Tdem.buc()
+class Tdem(BaseEm):
+    def __init__(self, x, y, z, height_source, current, res, thickness,
+                 wave_form, time_range, plot_number, turns=1, hankel_filter="kong241"):
+        # freq_rangeの渡し方 10^x 〜10^y x, yをリストで渡させる
+        # コンストラクタの継承
+        super().__init__(x, y, z, height_source, current, res, thickness, plot_number, turns)
+        # 必ず渡される引数
+        self.plot_number = plot_number
+        if wave_form != ("impulse" or "step_on" or "step_off"):
+            error_content = """Please set valid wave form. 'impulse' or 'step_on' or 'step_off' is only available"
+                            """
+            raise Exception(error_content)
+        else:
+            self.wave_form = wave_form
+
+        # 渡される引数から計算する変数
+        self.times = np.logspace(time_range[0], time_range[1], plot_number)
+        # GS法のフィルター数
+        self.gs_filter_length = 12
+
+    def get_gs_coefficient(self, gs_filter_length):
+        L = gs_filter_length
+        v = np.zeros(L)
+        nn2 = L / 2
+        for n in range(1, L + 1):
+            z = 0.0
+            for k in range(math.floor((n + 1) / 2), int(min(n, nn2) + 1)):
+                numerator = (k ** nn2) * math.factorial(2 * k)
+                denominator = (math.factorial(nn2 - k) * math.factorial(k)
+                               * math.factorial(k - 1) * math.factorial(n - k)
+                               * math.factorial(2 * k - n))
+                z = z + numerator / denominator
+
+            v[n - 1] = (-1) ** (n + nn2) * z
+        return v
+
+    def hankel_calc(self, transmitter, time):
+        ans = {}
+        sum_ = 0.0
+        ln2_on_t = np.log(2.0) / time
+        # laplace transform parameters
+        # if dbdt = 1, divide answer
+        if self.wave_form == "impulse":
+            dbdt = 0
+        elif self.wave_form == "step_on" or "step_off":
+            dbdt = 1
+
+        for n in range(1, self.gs_filter_length + 1):
+            p = n * ln2_on_t
+            omega = p / 1j
+            kernel = self.make_kernel(transmitter, omega)
+            kernel_h_z = kernel["kernel_h_z"]
+            sum_ = (sum_ +
+                    self.gs_coefficient[n - 1] * kernel_h_z / (omega ** dbdt))
+
+        if transmitter == "vmd":
+            h_z = np.dot(self.wt0.T, sum_)
+            ans["h_z"] = ln2_on_t * h_z / (4 * np.pi * self.r)
+        elif transmitter == "circular_loop":
+            h_z = np.dot(self.wt1.T, sum_)
+            ans["h_z"] = ln2_on_t * self.rad * h_z / (self.rad * 2)
+
+        return ans
+
+    def repeat_hankel(self, transmitter):
+        ans = np.zeros(self.plot_number, dtype=complex)
+        self.gs_coefficient = self.get_gs_coefficient(self.gs_filter_length)
+        for time_index, time in enumerate(self.times):
+            hankel_result = self.hankel_calc(transmitter, time)
+            ans[time_index] = hankel_result["h_z"]
+
+        return {"h_z": ans,  "time": self.times}
