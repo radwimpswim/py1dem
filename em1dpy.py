@@ -4,7 +4,7 @@ import sys
 
 import numpy as np
 import scipy.io
-from scipy.special import erf
+from scipy.special import erf, erfc
 import math
 
 
@@ -82,8 +82,13 @@ class BaseEm(metaclass=ABCMeta):
         self.num_layer = len(res)
         self.sigma = 1 / res
         self.r = np.sqrt(x ** 2 + y ** 2)
-        self.cos_phai = self.x / self.r
-        self.sin_phai = self.y / self.r
+        if self.r == 0:
+            warnings.warn('when r=0, Ex and Ey diverge')
+            self.cos_phai = 0
+            self.sin_phai = 0
+        else:
+            self.cos_phai = self.x / self.r
+            self.sin_phai = self.y / self.r
 
         if hankel_filter == "kong241":
             print("hankel filter is kong241")
@@ -183,7 +188,7 @@ class BaseEm(metaclass=ABCMeta):
     def repeat_hankel(self):
         pass
 
-    def vmd(self):
+    def vmd_base(self, transmitter):
         # 送信源で計算できない座標が入力されたときエラーを出す
         """
         if self.z == 0:
@@ -192,9 +197,6 @@ class BaseEm(metaclass=ABCMeta):
         if self.r == 0:
             raise Exception("x, y座標共に0のため、計算結果が発散しました。")
 
-        # 送信源固有のパラメータ設定
-        transmitter = sys._getframe().f_code.co_name
-
         self.lamda = self.y_base / self.r
         self.moment = self.vmd_moment
 
@@ -202,7 +204,7 @@ class BaseEm(metaclass=ABCMeta):
 
         return ans
 
-    def circular_loop(self, rad):
+    def circular_loop_base(self, rad, transmitter):
         if rad == 0:
             raise Exception("ループの半径を設定してください")
 
@@ -279,8 +281,15 @@ class Fdem(BaseEm):
                 , "h_x": ans[:, 3], "h_y": ans[:, 4], "h_z": ans[:, 5]
                 }
 
-    def coincident_loop():
-        pass
+    def vmd(self):
+        transmitter = sys._getframe().f_code.co_name
+        ans = self.vmd_base(transmitter)
+        return ans
+
+    def circular_loop(self, rad):
+        transmitter = sys._getframe().f_code.co_name
+        ans = self.circular_loop_base(rad, transmitter)
+        return ans
 
     def vmd_analytical(self):
         # 角速度・波数の算出
@@ -324,7 +333,8 @@ class Tdem(BaseEm):
         super().__init__(x, y, z, height_source, current, res, thickness, plot_number, turns)
         # 必ず渡される引数
         self.plot_number = plot_number
-        if wave_form != ("impulse" or "step_on" or "step_off"):
+        wave_form_list = ["impulse", "step_on", "step_off"]
+        if wave_form not in wave_form_list:
             error_content = """Please set valid wave form. 'impulse' or 'step_on' or 'step_off' is only available"
                             """
             raise Exception(error_content)
@@ -360,7 +370,7 @@ class Tdem(BaseEm):
         # if dbdt = 1, divide answer
         if self.wave_form == "impulse":
             dbdt = 0
-        elif self.wave_form == "step_on" or "step_off":
+        elif (self.wave_form == "step_on") or (self.wave_form == "step_off"):
             dbdt = 1
 
         for n in range(1, self.gs_filter_length + 1):
@@ -368,8 +378,7 @@ class Tdem(BaseEm):
             omega = p / 1j
             kernel = self.make_kernel(transmitter, omega)
             kernel_h_z = kernel["kernel_h_z"]
-            sum_ = (sum_ +
-                    self.gs_coefficient[n - 1] * kernel_h_z / (omega ** dbdt))
+            sum_ = sum_ + self.gs_coefficient[n - 1] * kernel_h_z / omega# ** dbdt)
 
         if transmitter == "vmd":
             h_z = np.dot(self.wt0.T, sum_)
@@ -388,3 +397,36 @@ class Tdem(BaseEm):
             ans[time_index] = hankel_result["h_z"]
 
         return {"h_z": ans,  "time": self.times}
+
+    def vmd(self):
+        transmitter = sys._getframe().f_code.co_name
+        ans = self.vmd_base(transmitter)
+        h_z0 = - self.vmd_moment / (4 * np.pi * self.r ** 3)
+        if self.wave_form == "impulse":
+            pass
+        elif self.wave_form == "step_on":
+            ans["h_z"] = np.imag(ans["h_z"])
+        elif self.wave_form == "step_off":
+            ans["h_z"] = h_z0 - np.imag(ans["h_z"])
+
+        return ans
+
+    def vmd_analytical(self):
+        theta = np.sqrt(self.mu0 / (4 * (self.times) * self.res[0]))
+        if self.wave_form == "impulse":
+            h_z = (self.vmd_moment / (2 * np.pi * self.mu0 * self.sigma[0] * self.r ** 5))\
+                   * (9 * erf(theta * self.r) - (2 * theta * self.r / (np.pi ** 0.5))\
+                   * (9 + 6 * (theta ** 2) * (self.r ** 2) + 4 * (theta ** 4) * (self.r ** 4))\
+                   * np.exp(-(theta ** 2) * (self.r ** 2)))
+        elif self.wave_form == "step_on":
+            h_z = self.vmd_moment / (4 * np.pi * self.r ** 3)\
+                  * (9 / ( 2 * theta ** 2 * self.r ** 2) * erf(theta * self.r) + erfc(theta * self.r)\
+                  -1 / np.sqrt(np.pi) * (9 / theta / self.r + 4 * theta * self.r) * np.exp(-1 * theta ** 2 * self.r ** 2))
+        elif self.wave_form == "step_off":
+            h_z = -self.vmd_moment / (4 * np.pi * self.r ** 3)\
+                  * (9 / ( 2 * theta ** 2 * self.r ** 2) * erf(theta * self.r) - erf(theta * self.r)\
+                  -1 / np.sqrt(np.pi) * (9 / theta / self.r + 4 * theta * self.r)\
+                  * np.exp(-1 * theta ** 2 * self.r ** 2))
+            pass
+
+        return {"h_z": h_z, "times": self.times}
