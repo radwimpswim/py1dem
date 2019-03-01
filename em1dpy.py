@@ -213,8 +213,6 @@ class BaseEm(metaclass=ABCMeta):
         self.lamda = self.y_base / self.rad
         self.moment = self.circular_loop_moment
 
-        transmitter = sys._getframe().f_code.co_name
-
         ans = self.repeat_hankel(transmitter)
 
         return ans
@@ -367,7 +365,7 @@ class Tdem(BaseEm):
         sum_ = 0.0
         ln2_on_t = np.log(2.0) / time
         # laplace transform parameters
-        # if dbdt = 1, divide answer
+        # if dbdt = 1, divide answer omega(equal s in lanlace domain)
         if self.wave_form == "impulse":
             dbdt = 0
         elif (self.wave_form == "step_on") or (self.wave_form == "step_off"):
@@ -377,8 +375,7 @@ class Tdem(BaseEm):
             p = n * ln2_on_t
             omega = p / 1j
             kernel = self.make_kernel(transmitter, omega)
-            kernel_h_z = kernel["kernel_h_z"]
-            sum_ = sum_ + self.gs_coefficient[n - 1] * kernel_h_z / omega# ** dbdt)
+            sum_ = sum_ + self.gs_coefficient[n - 1] * kernel["kernel_h_z"] / (omega ** dbdt)
 
         if transmitter == "vmd":
             h_z = np.dot(self.wt0.T, sum_)
@@ -411,6 +408,19 @@ class Tdem(BaseEm):
 
         return ans
 
+    def circular_loop(self, rad):
+        transmitter = sys._getframe().f_code.co_name
+        ans = self.circular_loop_base(rad, transmitter)
+        h_z0 = self.current / (2 * self.rad)
+        if self.wave_form == "impulse":
+            ans["h_z"] = abs(ans["h_z"])
+        elif self.wave_form == "step_on":
+            ans["h_z"] = np.imag(ans["h_z"])
+        elif self.wave_form == "step_off":
+            ans["h_z"] = h_z0 - abs(np.imag(ans["h_z"]))
+
+        return ans
+
     def vmd_analytical(self):
         theta = np.sqrt(self.mu0 / (4 * (self.times) * self.res[0]))
         if self.wave_form == "impulse":
@@ -428,5 +438,21 @@ class Tdem(BaseEm):
                   -1 / np.sqrt(np.pi) * (9 / theta / self.r + 4 * theta * self.r)\
                   * np.exp(-1 * theta ** 2 * self.r ** 2))
             pass
+
+        return {"h_z": h_z, "times": self.times}
+
+    def circular_loop_analytical(self, rad):
+        theta = np.sqrt(self.mu0 / (4 * (self.times) * self.res[0]))
+        if self.wave_form == "impulse":
+            h_z = -self.current / (self.mu0 * self.sigma[0] * self.rad ** 3)\
+                  * (3 * erf(theta * self.rad) - (2 / np.pi**(1/2)) * theta * self.rad
+                     * (3 + 2 * theta ** 2 * rad ** 2) * np.exp(-theta ** 2 * rad ** 2))
+        elif self.wave_form == "step_on":
+            print("analytical ans doesn't exist")
+            h_z = np.zeros(len(self.times))
+        elif self.wave_form == "step_off" or "step_on":
+            h_z = self.current / (2 * self.rad)\
+                  * ((3 / (np.sqrt(np.pi) * theta * self.rad)) * np.exp(-theta ** 2 * self.rad ** 2)
+                     + (1 - 3 / (2 * theta ** 2 * self.rad ** 2)) * erf(theta * self.rad))
 
         return {"h_z": h_z, "times": self.times}
