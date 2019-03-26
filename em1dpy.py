@@ -72,10 +72,7 @@ class BaseEm(metaclass=ABCMeta):
         # 指定しておく引数（変えたいユーザはほぼいない）
         self.mu0 = 1.25663706e-6
         self.mu = np.ones(len(res)) * self.mu0
-        self.vmd_moment = 1
         self.moment = 1
-        self.circular_loop_moment = self.moment * current * turns
-        self.coincident_loop_moment = self.moment * current * turns * turns
         self.epsrn = 8.85418782e-12
 
         # 渡された引数から計算する変数
@@ -90,14 +87,14 @@ class BaseEm(metaclass=ABCMeta):
             self.cos_phai = self.x / self.r
             self.sin_phai = self.y / self.r
 
+        # 第何層目に送受信源があるかを定義
         self.h = np.zeros((1, self.num_layer - 1))
-        # define the index of receiver existing layer
         if z <= 0:  # (1) self.rlayer = 1
             self.rlayer = 1
-            for ii in range(2, self.num_layer):  # (2) 2 <= self.rlayer <= self.num_layer-1
+            for ii in range(2, self.num_layer):  #
                 self.h[0, ii - 1] = self.h[0, ii - 2] + thickness[ii - 2]
         else:
-            self.rlayer = 19960524
+            self.rlayer = []
         if self.num_layer == 2 and z > 0:  # (1') self.rlayer = 2
             self.rlayer = 2
         elif (self.num_layer >= 3) and (z > 0):
@@ -105,15 +102,13 @@ class BaseEm(metaclass=ABCMeta):
                 self.h[0, ii - 1] = self.h[0, ii - 2] + thickness[ii - 2]
                 if z >= self.h[0, ii - 2] and z <= self.h[0, ii - 1]:
                     self.rlayer = ii
-
-        if self.rlayer == 19960524:  # (3) self.rlayer = self.num_layer
+        if self.rlayer == []:  # (3) self.rlayer = self.num_layer
             self.rlayer = ii + 1
 
-            # define the index of trasmitter existing layer
         if hs <= 0:  # (1) self.tlayer = 1
             self.tlayer = 1
         else:
-            self.tlayer = 19960524
+            self.tlayer = []
         if self.num_layer == 2 and hs > 0:  # (2) self.tlayer = 2
             self.tlayer = 2
         elif (self.num_layer >= 3) and (hs > 0):
@@ -122,7 +117,7 @@ class BaseEm(metaclass=ABCMeta):
                 self.h[0, ii - 1] = self.h[0, ii - 2] + thickness[ii - 2]
                 if hs >= self.h[0, ii - 2] and hs <= self.h[0, ii - 1]:
                     self.tlayer = ii
-        if self.tlayer == 19960524:  # (3) self.tlayer = self.num_layer
+        if self.tlayer == []:  # (3) self.tlayer = self.num_layer
             self.tlayer = ii + 1
 
         if hankel_filter == "kong241":
@@ -157,72 +152,49 @@ class BaseEm(metaclass=ABCMeta):
             tanhuh[ii] = np.tanh(u[ii] * self.thickness[ii-1])
 
         ztilda = np.ones((1,self.num_layer,1),dtype=np.complex)
-        ytilda = np.ones((1,self.num_layer,1),dtype=np.complex)
         ztilda[0,0,0] = 1j * omega * self.mu0
         ztilda[0,1:self.num_layer,0] = 1j * omega * self.mu[0:self.num_layer]
-        ytilda[0,0,0] = 1j * omega * self.epsrn
-        ytilda[0,1:self.num_layer,0] = self.sigma[0:self.num_layer-1] + 1j * omega * self.epsrn
 
         Y = np.ones((self.num_layer,self.filter_length,1),dtype=np.complex)
-        Z = np.ones((self.num_layer,self.filter_length,1),dtype=np.complex)
+
         for ii in range (1,self.num_layer+1):
             Y[ii-1] = u[ii-1] / ztilda[0,ii-1,0]
-            Z[ii-1] = u[ii-1] / ytilda[0,ii-1,0]
 
         """compute Reflection coefficient ( (down to up) and (up to down) )"""
         #   reciver(m) > transmitter(n) (down to up)
         if self.tlayer <= self.rlayer:
             Ytilda = np.ones((self.num_layer, self.filter_length, 1), dtype=np.complex)
-            Ztilda = np.ones((self.num_layer, self.filter_length, 1), dtype=np.complex)
             Ytilda[self.num_layer - 1] = Y[self.num_layer - 1]  # (1)Ytilda{self.num_layer}
-            Ztilda[self.num_layer - 1] = Z[self.num_layer - 1]
 
             r_te = np.ones((self.num_layer, self.filter_length, 1), dtype=np.complex)
-            r_tm = np.ones((self.num_layer, self.filter_length, 1), dtype=np.complex)
 
             for ii in range(self.num_layer - 1, 1, -1):  # (2)Ytilda{self.num_layer-1,self.num_layer,...,2}
                 numerator_Y = Ytilda[ii] + Y[ii - 1] * tanhuh[ii - 1]
                 denominator_Y = Y[ii - 1] + Ytilda[ii] * tanhuh[ii - 1]
                 Ytilda[ii - 1] = Y[ii - 1] * numerator_Y / denominator_Y
 
-                numerator_Z = Ztilda[ii] + Z[ii - 1] * tanhuh[ii - 1]
-                denominator_Z = Z[ii - 1] + Ztilda[ii] * tanhuh[ii - 1]
-                Ztilda[ii - 1] = Z[ii - 1] * numerator_Z / denominator_Z
-
                 r_te[ii - 1] = (Y[ii - 1] - Ytilda[ii]) / (Y[ii - 1] + Ytilda[ii])
-                r_tm[ii - 1] = (Z[ii - 1] - Ztilda[ii]) / (Z[ii - 1] + Ztilda[ii])
 
             r_te[0] = (Y[0] - Ytilda[1]) / (Y[0] + Ytilda[1])
             r_te[self.num_layer - 1] = 0
-            r_tm[0] = (Z[0] - Ztilda[1]) / (Z[0] + Ztilda[1])
-            r_tm[self.num_layer - 1] = 0
 
         # reciver(m) < transmitter(n) (up to down)
         if self.tlayer >= self.rlayer:
             Yhat = np.ones((self.num_layer, self.filter_length, 1), dtype=np.complex)
             Zhat = np.ones((self.num_layer, self.filter_length, 1), dtype=np.complex)
             Yhat[0] = Y[0]  # (1)Y{0}
-            Zhat[0] = Z[0]
 
             R_te = np.ones((self.num_layer, self.filter_length, 1), dtype=np.complex)
-            R_tm = np.ones((self.num_layer, self.filter_length, 1), dtype=np.complex)
 
             for ii in range(2, self.num_layer):
                 numerator_Y = Yhat[ii - 2] + Y[ii - 1] * tanhuh[ii - 1]
                 denominator_Y = Y[ii - 1] + Yhat[ii - 2] * tanhuh[ii - 1]
                 Yhat[ii - 1] = Y[ii - 1] * numerator_Y / denominator_Y  # (2)Yhat{2,3,...,self.num_layer-2,self.num_layer-1}
 
-                numerator_Z = Zhat[ii - 2] + Z[ii - 1] * tanhuh[ii - 1]
-                denominator_Z = Z[ii - 1] + Zhat[ii - 2] * tanhuh[ii - 1]
-                Zhat[ii - 1] = Z[ii - 1] * numerator_Z / denominator_Z
-
                 R_te[ii - 1] = (Y[ii - 1] - Yhat[ii - 2]) / (Y[ii - 1] + Yhat[ii - 2])
-                R_tm[ii - 1] = (Z[ii - 1] - Zhat[ii - 2]) / (Z[ii - 1] + Zhat[ii - 2])
 
             R_te[self.num_layer - 1] = (Y[self.num_layer - 1] - Yhat[self.num_layer - 2]) / (Y[self.num_layer - 1] + Yhat[self.num_layer - 2])
             R_te[0] = 0
-            R_tm[self.num_layer - 1] = (Z[self.num_layer - 1] - Zhat[self.num_layer - 2]) / (Z[self.num_layer - 1] + Zhat[self.num_layer - 2])
-            R_tm[0] = 0
 
         """compute Upside and Downside reflection coefficient"""
         U_te = np.ones((self.num_layer, self.filter_length, 1), dtype=np.complex)
@@ -240,70 +212,43 @@ class BaseEm(metaclass=ABCMeta):
             U_te[0] = 0
             U_te[1] = (Y[1] * (1 + r_te[1 - 1]) + Y[1 - 0] * (1 - r_te[1 - 1])) / (2 * Y[1]) * (
                         0 + krondel(1 - 1, self.tlayer - 1) * np.exp(-u[self.tlayer - 1] * (self.h[0, self.tlayer - 1] - self.hs)))
-            U_tm[0] = 0
-            U_tm[1] = (Y[1] * (1 + r_tm[1 - 1]) + Y[1 - 0] * (1 - r_tm[1 - 1])) / (2 * Y[1]) * (
-                        0 + krondel(1 - 1, self.tlayer - 1) * np.exp(-u[self.tlayer - 1] * (self.h[0, self.tlayer - 1] - self.hs)))
+
             for jj in range(3, self.rlayer + 1):
                 U_te[0] = 0
                 U_te[jj - 1] = (Y[jj - 1] * (1 + r_te[jj - 2]) + Y[jj - 2] * (1 - r_te[jj - 2])) / (
                             2 * Y[jj - 1]) * (U_te[jj - 2] * np.exp(
                     -u[jj - 2] * (self.h[0, jj - 2] - self.h[0, jj - 3])) + krondel(jj - 2, self.tlayer - 1) * np.exp(
                     -u[self.tlayer - 1] * (self.h[0, self.tlayer - 1] - self.hs)))
-                U_tm[0] = 0
-                U_tm[jj - 1] = (Y[jj - 1] * (1 + r_tm[jj - 2]) + Y[jj - 2] * (1 - r_tm[jj - 2])) / (
-                            2 * Y[jj - 1]) * (U_te[jj - 2] * np.exp(
-                    -u[jj - 2] * (self.h[0, jj - 2] - self.h[0, jj - 3])) + krondel(jj - 2, self.tlayer - 1) * np.exp(
-                    -u[self.tlayer - 1] * (self.h[0, self.tlayer - 1] - self.hs)))
+
             if self.rlayer == self.num_layer:
                 D_te[self.rlayer - 1] = 0
-                D_tm[self.rlayer - 1] = 0
             else:
                 D_te[self.rlayer - 1] = U_te[self.rlayer - 1] * np.exp(
                     -u[self.rlayer - 1] * (self.h[0, self.rlayer - 1] - self.h[0, self.rlayer - 2])) * r_te[self.rlayer - 1]
-                D_tm[self.rlayer - 1] = U_tm[self.rlayer - 1] * np.exp(
-                    -u[self.rlayer - 1] * (self.h[0, self.rlayer - 1] - self.h[0, self.rlayer - 2])) * r_tm[self.rlayer - 1]
         elif self.tlayer > self.rlayer:
             D_te[self.num_layer - 1] = 0
             D_te[self.num_layer - 2] = (Y[self.num_layer - 2] * (1 + R_te[self.num_layer - 1]) + Y[self.num_layer - 1] * (1 - R_te[self.num_layer - 1])) / (
                         2 * Y[self.num_layer - 2]) * (0 + krondel(self.num_layer, self.tlayer) * np.exp(
                 -u[self.tlayer - 1] * (self.hs - self.h[0, self.tlayer - 2])))
-            D_tm[self.num_layer - 1] = 0
-            D_tm[self.num_layer - 2] = (Y[self.num_layer - 2] * (1 + R_tm[self.num_layer - 1]) + Y[self.num_layer - 1] * (1 - R_tm[self.num_layer - 1])) / (
-                        2 * Y[self.num_layer - 2]) * (0 + krondel(self.num_layer, self.tlayer) * np.exp(
-                -u[self.tlayer - 1] * (self.hs - self.h[0, self.tlayer - 2])))
-
             for jj in range(self.num_layer - 2, self.rlayer - 1, -1):
                 D_te[jj - 1] = (Y[jj - 1] * (1 + R_te[jj]) + Y[jj] * (1 - R_te[jj])) / (2 * Y[jj - 1]) * (
                             D_te[jj] * np.exp(-u[jj] * (self.h[0, jj] - self.h[0, jj - 1])) + krondel(jj,
                                                                                             self.tlayer - 1) * np.exp(
                         -u[self.tlayer - 1] * (self.hs - self.h[0, self.tlayer - 2])))
-                D_tm[jj - 1] = (Y[jj - 1] * (1 + R_tm[jj]) + Y[jj] * (1 - R_tm[jj])) / (2 * Y[jj - 1]) * (
-                            D_te[jj] * np.exp(-u[jj] * (self.h[0, jj] - self.h[0, jj - 1])) + krondel(jj,
-                                                                                            self.tlayer - 1) * np.exp(
-                        -u[self.tlayer - 1] * (self.hs - self.h[0, self.tlayer - 2])))
             if self.rlayer == 1:
                 U_te[self.rlayer - 1] = 0
-                U_tm[self.rlayer - 1] = 0
             else:
                 U_te[self.rlayer - 1] = D_te[self.rlayer - 1] * np.exp(
                     u[self.rlayer - 1] * (self.h[0, self.rlayer - 2] - self.h[0, self.rlayer - 1])) * R_te[self.rlayer - 1]
-                U_tm[self.rlayer - 1] = D_tm[self.rlayer - 1] * np.exp(
-                    u[self.rlayer - 1] * (self.h[0, self.rlayer - 2] - self.h[0, self.rlayer - 1])) * R_tm[self.rlayer - 1]
         elif self.tlayer == self.rlayer:
             if self.rlayer == 1:
                 U_te[0] = 0
                 D_te[self.rlayer - 1] = 1 / (1 - 0) * r_te[self.rlayer - 1] * (
                             0 + np.exp(-u[self.rlayer - 1] * (self.h[0, self.rlayer - 1] - self.hs)))  # 0 is derived from Rte[0] = 0
-                U_tm[0] = 0
-                D_tm[self.rlayer - 1] = 1 / (1 - 0) * r_tm[self.rlayer - 1] * (
-                            0 + np.exp(-u[self.rlayer - 1] * (self.h[0, self.rlayer - 1] - self.hs)))
             elif self.rlayer == self.num_layer:
                 U_te[self.rlayer - 1] = 1 / (1 - 0) * R_te[self.rlayer - 1] * (0 + np.exp(
                     u[self.rlayer - 1] * (self.h[0, self.rlayer - 2] - self.hs)))  # 0 is derived from rTE{self.num_layer} = 0
                 D_te[self.num_layer - 1] = 0
-                U_tm[self.rlayer - 1] = 1 / (1 - 0) * R_tm[self.rlayer - 1] * (
-                            0 + np.exp(u[self.rlayer - 1] * (self.h[0, self.rlayer - 2] - self.hs)))
-                D_tm[self.num_layer - 1] = 0
             else:
                 U_te[self.rlayer - 1] = 1 / (1 - R_te[self.rlayer - 1] * r_te[self.rlayer - 1] * np.exp(
                     -2 * u[self.rlayer - 1] * (self.h[0, self.rlayer - 1] - self.h[0, self.rlayer - 2]))) * R_te[self.rlayer - 1] * (
@@ -315,17 +260,6 @@ class BaseEm(metaclass=ABCMeta):
                                                R_te[self.rlayer - 1] * np.exp(-u[self.rlayer - 1] * (
                         self.h[0, self.rlayer - 1] - 2 * self.h[0, self.rlayer - 2] + self.hs)) + np.exp(
                                            -u[self.rlayer - 1] * (self.h[0, self.rlayer - 1] - self.hs)))
-                U_tm[self.rlayer - 1] = 1 / (1 - R_tm[self.rlayer - 1] * r_tm[self.rlayer - 1] * np.exp(
-                    -2 * u[self.rlayer - 1] * (self.h[0, self.rlayer - 1] - self.h[0, self.rlayer - 2]))) * R_tm[self.rlayer - 1] * (
-                                               r_tm[self.rlayer - 1] * np.exp(
-                                           u[self.rlayer - 1] * (self.h[0, self.rlayer - 2] - 2 * self.h[0, self.rlayer - 1] + self.hs)) + np.exp(
-                                           u[self.rlayer - 1] * (self.h[0, self.rlayer - 2] - self.hs)))
-                D_tm[self.rlayer - 1] = 1 / (1 - R_tm[self.rlayer - 1] * r_tm[self.rlayer - 1] * np.exp(
-                    -2 * u[self.rlayer - 1] * (self.h[0, self.rlayer - 1] - self.h[0, self.rlayer - 2]))) * r_tm[self.rlayer - 1] * (
-                                               R_tm[self.rlayer - 1] * np.exp(-u[self.rlayer - 1] * (
-                        self.h[0, self.rlayer - 1] - 2 * self.h[0, self.rlayer - 2] + self.hs)) + np.exp(
-                                           -u[self.rlayer - 1] * (self.h[0, self.rlayer - 1] - self.hs)))
-
         """compute Damping coefficient"""
         if self.rlayer == 1:
             e_up = 0
@@ -349,8 +283,8 @@ class BaseEm(metaclass=ABCMeta):
 
         if transmitter == "vmd":
             # p.209 eq. 4.44, 4.45, 4.46
-            kernel_e_phai = kernel_te * self.lamda ** 2 / u[self.tlayer - 1]  # ePhai
-            kernel_h_r = kernel_te_hr * self.lamda ** 2 / u[self.tlayer - 1]  # hR
+            kernel_e_phai = kernel_te * self.lamda ** 2 / u[self.tlayer - 1]
+            kernel_h_r = kernel_te_hr * self.lamda ** 2 / u[self.tlayer - 1]
             kernel_h_z = (kernel_te_hz + k[:, self.rlayer - 1] ** 2 * kernel_te) * self.lamda / u[self.tlayer - 1]
             return {"kernel_e_phai": kernel_e_phai, "kernel_h_r": kernel_h_r, "kernel_h_z": kernel_h_z,"ztilda[0,self.tlayer-1,0]": ztilda[0, self.tlayer - 1, 0]}
         elif transmitter == "circular_loop":
@@ -386,7 +320,7 @@ class BaseEm(metaclass=ABCMeta):
             raise Exception("x, y座標共に0のため、計算結果が発散しました。")
 
         self.lamda = self.y_base / self.r
-        self.moment = self.vmd_moment
+        self.moment = self.moment
 
         ans = self.repeat_hankel(transmitter)
 
@@ -399,7 +333,8 @@ class BaseEm(metaclass=ABCMeta):
         # 送信源固有のパラメータ設定
         self.rad = rad
         self.lamda = self.y_base / self.rad
-        self.moment = self.circular_loop_moment
+        self.moment = self.moment * self.current * self.turns
+        self.coincident_loop_moment = self.moment * self.current * self.turns ** 2
 
         ans = self.repeat_hankel(transmitter)
 
@@ -440,7 +375,7 @@ class Fdem(BaseEm):
             h_r = np.dot(self.wt1.T, kernel["kernel_h_r"]) / self.r
             h_z = np.dot(self.wt0.T, kernel["kernel_h_z"]) / self.r
             ans["e_x"] = (-1 * kernel["ztilda[0,self.tlayer-1,0]"] * - self.sin_phai * e_phai)/(4 * np.pi)
-            ans["e_y"] = (-1 * kernel["ztilda[0,self.tlayer-1,0]"] * - self.sin_phai * e_phai)/(4 * np.pi)
+            ans["e_y"] = (-1 * kernel["ztilda[0,self.tlayer-1,0]"] * self.cos_phai * e_phai)/(4 * np.pi)
             ans["e_z"] = 0
             ans["h_x"] = (self.cos_phai * h_r)/(4 * np.pi)
             ans["h_y"] = (self.sin_phai * h_r)/(4 * np.pi)
@@ -535,6 +470,7 @@ class Fdem(BaseEm):
         return {"freq": self.freq, "h_z": h_z}
 
 
+###
 class Tdem(BaseEm):
     def __init__(self, x, y, z, hs, current, res, thickness,
                  wave_form, time_range, plot_number, turns=1, hankel_filter="kong241"):
